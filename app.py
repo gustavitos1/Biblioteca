@@ -1,6 +1,8 @@
 from flask import Flask, jsonify, request
 from sqlalchemy import *
 from flask_pydantic_spec import FlaskPydanticSpec
+from sqlalchemy.orm import Session
+
 from models import *
 from datetime import *
 from _strptime import *
@@ -22,41 +24,28 @@ jwt = JWTManager(app)
 def index():
     return 'Bem vindo a Biblioteca'
 
-# def admin_required(fn):
-#     @wraps(fn)
-#     def wrapper(*args, **kwargs):
-#         current_user = get_jwt_identity()
-#         db_session = SessionLocal()
-#         try:
-#             sql = select(Usuario).where(Usuario.id_usuario == current_user)
-#             usuario = db_session.execute(sql).scalar()
-#             if usuario and usuario.papel == "admin":
-#                 return fn(*args, **kwargs)
-#             return jsonify({"msg":"Acesso negado: Requer privilégios de administrador"}), 403
-#         finally:
-#             db_session.close()
-#     return wrapper
-#
-# @app.route('/login', methods=['POST'])
-# def login():
-#     dados = request.get_json()
-#     email = dados.get('email')
-#     senha = dados.get('senha')
-#
-#     if not email or not senha:
-#         return jsonify({"Msg": "Dados incompletos"}), 400
-#     sql = select(Usuario).where(Usuario.email == email)
-#     user = db_session.execute(sql).scalar()
-#     usuario = db_session.Select(Usuario).filter_by(email=email).first()
-#
-#     if usuario and usuario.check_password(senha):
-#         access_token = create_access_token(identity=usuario.nome)
-#         return jsonify({'nome': usuario.nome, 'email': usuario.email, 'access_token': access_token}), 200
-#
-#     return jsonify({"Msg": "Credenciais inválidas"}), 401
+@app.route('/login', methods=['POST'])
+def login():
+    dados = request.get_json()
+    nome = dados['nome']
+    senha = dados['senha']
 
+    db_session = SessionLocal()
 
+    try:
+        sql = select(Usuario).where(Usuario.nome == nome)
+        user = db_session.execute(sql).scalar()
+
+        if user and user.check_password_hash(senha):
+            acess_token = create_access_token(identity=str(user.email))
+            return jsonify(acess_token=acess_token)
+        return jsonify({"msg":"Credenciais invalidas"}), 401
+
+    finally:
+        db_session.close()
 @app.route("/cadastrar_usuario", methods=['POST'])
+#@jwt_required()
+# @admin_required
 def cadastrar_usuario():
     """
     Cadastrar Usuario
@@ -75,27 +64,36 @@ def cadastrar_usuario():
     }
     :return:
     """
+    db_session = SessionLocal()
     try:
-        dados_usuario = request.get_json()
-        nome = dados_usuario['nome']
-        cpf = dados_usuario['cpf']
-        email = dados_usuario['email']
-
-        if not nome and not cpf and not email:
+        dados_Usuario = request.get_json()
+        nome = dados_Usuario['nome']
+        cpf = dados_Usuario['cpf']
+        email = dados_Usuario['email']
+        senha = dados_Usuario['senha']
+        papel = dados_Usuario['papel']
+        if not nome or not cpf or not email or not senha or not papel:
             return jsonify({"mensagem": "Preencha todos os campos"}), 400
-
         form_evento = Usuario(
-            cpf=cpf,
             nome=nome,
+            cpf=cpf,
             email=email,
+            senha=senha,
+            papel=papel
         )
-        # novo_usuario = Usuario(nome=nome, email=email, cpf=cpf)
-        # novo_usuario.set_senha_hash(senha)
-        # db_session.add(novo_usuario)
-        form_evento.save()
-        return jsonify({"mensagem": "usuario cadastrado com sucesso"}), 201
+
+        user_id = form_evento.id_usuario
+        form_evento.save(db_session)
+        form_evento.set_senha_hash(senha)
+        db_session.add(form_evento)
+        db_session.commit()
+        return jsonify({"mensagem": "Usuário criado com sucesso", "user_id": user_id}), 201
+
     except TypeError:
-        return jsonify({"mensagem": "Resultado Invalido"}), 400
+        return jsonify({"mensagem": "Resultado Invalido"})
+    finally:
+        db_session.close()
+
 
 @app.route("/cadastrar_livro", methods=['POST'])
 def cadastrar_livro():
@@ -117,6 +115,7 @@ def cadastrar_livro():
     }
     :return:
     """
+    db_session = SessionLocal()
     try:
         dados_livro = request.get_json()
         isbn = dados_livro['isbn']
@@ -138,10 +137,12 @@ def cadastrar_livro():
                 autor=autor,
                 resumo=resumo
             )
-        form_evento.save()
+        form_evento.save(db_session)
         return jsonify({"mensagem": "livro cadastrado com sucesso"}), 201
     except TypeError:
         return jsonify({"mensagem": "Resultado Invalido"})
+    finally:
+        db_session.close()
 
 @app.route("/cadastrar_emprestimo", methods=['POST'])
 def cadastrar_emprestimo():
@@ -163,27 +164,27 @@ def cadastrar_emprestimo():
     }
     :return:
     """
+    db_session = SessionLocal()
     try:
         dados_emprestimo = request.get_json()
         data_emprestimo = dados_emprestimo['Data_Emprestimo']
         data_devolucao = dados_emprestimo['Data_Devolucao']
-        status = dados_emprestimo['Status']
         id_usuario = dados_emprestimo['id_usuario']
         id_livro = dados_emprestimo['id_livro']
-        if not data_emprestimo and not data_devolucao and not status and not id_usuario and not id_livro:
+        if not data_emprestimo and not data_devolucao and not id_usuario and not id_livro:
             return jsonify({"mensagem": "Preencha todos os campos"})
         form_evento = Emprestimo(
                     data_emprestimo=data_emprestimo,
                     data_devolucao=data_devolucao,
-                    status=status,
                     id_livro=id_livro,
                     id_usuario=id_usuario
                 )
-        form_evento.save()
-        return jsonify({"mensagem": "emprestimo cadastrado com sucesso"})
+        form_evento.save(db_session)
+        return jsonify({"mensagem": "emprestimo cadastrado com sucesso"}), 201
     except TypeError:
-        return jsonify({"mensagem": "Resultado Invalido"})
-
+        return jsonify({"mensagem": "Resultado Invalido"}), 400
+    finally:
+        db_session.close()
 
 
 @app.route("/livros", methods=['GET'])
@@ -201,6 +202,7 @@ def livros():
 
     :return:
     """
+    db_session = SessionLocal()
     sql_livros = Select(Livro)
     lista_livros = db_session.execute(sql_livros).scalars().all()
     print(lista_livros)
@@ -211,6 +213,7 @@ def livros():
     return jsonify(resultado), 200
 
 @app.route("/usuarios", methods=['GET'])
+# @jwt_required()
 def usuarios():
     """
     listar Usuarios
@@ -225,6 +228,7 @@ def usuarios():
 
     :return:
     """
+    db_session = SessionLocal()
     sql_usuarios = Select(Usuario)
     lista_usuarios = db_session.execute(sql_usuarios).scalars().all()
     print(lista_usuarios)
@@ -250,6 +254,7 @@ def emprestimos():
 
     :return:
     """
+    db_session = SessionLocal()
     sql_emprestimos = Select(Emprestimo)
     lista_emprestimos = db_session.execute(sql_emprestimos).scalars().all()
     print(lista_emprestimos)
@@ -260,6 +265,7 @@ def emprestimos():
     return jsonify(resultado), 200
 
 @app.route("/editar_usuario/<int:id_usuario>", methods=['PUT'])
+@jwt_required()
 def editar_usuario(id_usuario):
     """
     Editar Usuario
@@ -275,6 +281,7 @@ def editar_usuario(id_usuario):
     :param id_usuario:
     :return:
     """
+    db_session = SessionLocal()
     usuario = db_session.execute(select(Usuario).where(Usuario.id_usuario == id_usuario)).scalar()
 
     if usuario is None:
@@ -308,6 +315,7 @@ def editar_livro(id_livro):
     :param id_livro:
     :return:
     """
+    db_session = SessionLocal()
     livro = db_session.execute(select(Livro).where(Livro.id_livro == id_livro)).scalar()
 
     if livro is None:
@@ -330,6 +338,7 @@ def editar_livro(id_livro):
 
 @app.route("/deletar_usuario/<int:id_usuario>", methods=['DELETE'])
 def deletar_usuario(id_usuario):
+    db_session = SessionLocal()
     try:
         usuario = db_session.query(Usuario).get(id_usuario)
         if not usuario:
@@ -340,9 +349,12 @@ def deletar_usuario(id_usuario):
         return jsonify({"message": "Usuário excluído com sucesso"}), 200
     except Exception as e:
         return jsonify({"message": f"Erro ao excluir usuário: {str(e)}"}), 500
+    finally:
+        db_session.close()
 
 @app.route("/deletar_livro/<int:id_livro>", methods=['DELETE'])
 def deletar_livro(id_livro):
+    db_session = SessionLocal()
     try:
         livro = db_session.select(Livro).get(id_livro)
         if not livro:
@@ -353,9 +365,12 @@ def deletar_livro(id_livro):
         return jsonify({"message": "Livro excluído com sucesso"}), 200
     except Exception as e:
         return jsonify({"message": f"Erro ao excluir o livro: {str(e)}"}), 500
+    finally:
+        db_session.close()
 
 @app.route("/deletar_emprestimo/<int:id_emprestimo>", methods=['DELETE'])
 def deletar_emprestimo(id_emprestimo):
+    db_session = SessionLocal()
     try:
         emprestimo = db_session.query(Usuario).get(id_emprestimo)
         if not emprestimo:
@@ -366,9 +381,12 @@ def deletar_emprestimo(id_emprestimo):
         return jsonify({"message": "Emprestimo excluído com sucesso"}), 200
     except Exception as e:
         return jsonify({"message": f"Erro ao excluir emprestimo: {str(e)}"}), 500
+    finally:
+        db_session.close()
 
 def status_emprestimo(id_emprestimo, dia, mes, ano):
     try:
+        emprestimo = datetime.now().date()
         dia = int(dia)
         mes = int(mes)
         ano = int(ano)
